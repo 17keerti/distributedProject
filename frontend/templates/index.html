@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart City Stream</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            background-color: #f4f4f4;
+            color: #333;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        .container {
+            background-color: #fff;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            width: 80%;
+            max-width: 600px;
+        }
+        h1 {
+            color: #007bff;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            align-items: center;
+        }
+        select {
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            font-size: 16px;
+            flex-grow: 1;
+        }
+        button {
+            padding: 10px 15px;
+            font-size: 16px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+        }
+        button.subscribe {
+            background-color: #28a745;
+            color: white;
+        }
+        button.unsubscribe {
+            background-color: #dc3545;
+            color: white;
+        }
+        button:hover {
+            opacity: 0.9;
+        }
+        .log-container {
+            background-color: #f9f9f9;
+            border: 1px solid #eee;
+            border-radius: 5px;
+            padding: 15px;
+            max-height: 300px;
+            overflow-y: auto;
+            margin-top: 20px;
+        }
+        .log-title {
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: #555;
+        }
+        #log {
+            font-family: monospace;
+            font-size: 14px;
+            color: #444;
+            white-space: pre-wrap;
+            margin: 0;
+        }
+        .message {
+            padding: 8px 0;
+            border-bottom: 1px dashed #ddd;
+        }
+        .message:last-child {
+            border-bottom: none;
+        }
+        .status-message {
+            font-style: italic;
+            color: #777;
+        }
+    </style>
+    <script>
+        window.onload = function() {
+            const logDiv = document.getElementById("log");
+            const topicSelect = document.getElementById("topic");
+            const subscribedTopics = {}; // Track subscribed topics and their event sources
+
+            function addMessage(topic, msg) {
+                const el = document.createElement("div");
+                el.className = "message";
+                const topicSpan = document.createElement("strong");
+                topicSpan.textContent = `[${topic}] `;
+                el.appendChild(topicSpan);
+                try {
+                    el.appendChild(document.createTextNode(JSON.stringify(msg, null, 2)));
+                } catch (e) {
+                    el.appendChild(document.createTextNode(msg));
+                }
+                logDiv.appendChild(el);
+                if (logDiv.childNodes.length > 20) {
+                    logDiv.removeChild(logDiv.firstChild);
+                }
+                logDiv.scrollTop = logDiv.scrollHeight;
+            }
+
+            function setStatus(message) {
+                const el = document.createElement("div");
+                el.className = "status-message";
+                el.textContent = message;
+                logDiv.appendChild(el);
+                logDiv.scrollTop = logDiv.scrollHeight;
+            }
+
+            async function sendSubscription(action) {
+                const topic = topicSelect.value;
+                if (!topic) {
+                    alert("Please select a topic first.");
+                    return;
+                }
+                try {
+                    if (action === 'subscribe') {
+                        if (subscribedTopics[topic]) {
+                            alert(`Already subscribed to ${topic}.`);
+                            return;
+                        }
+
+                        const res = await fetch(`/subscribe`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ topic })
+                        });
+                        if (!res.ok) {
+                            const errorText = await res.text();
+                            alert(`❌ Error: ${errorText}`);
+                            return;
+                        }
+                        const data = await res.json();
+                        alert(`✅ Success: ${data.message}`);
+                        setStatus(`✅ Subscribed to ${topic}`);
+
+                        subscribedTopics[topic] = new EventSource(`/stream?topic=${encodeURIComponent(topic)}`);
+                        subscribedTopics[topic].onmessage = function(event) {
+                            try {
+                                const msg = JSON.parse(event.data);
+                                addMessage(topic, msg);
+                            } catch (err) {
+                                console.error("❌ Failed to parse:", err);
+                                addMessage(topic, `❌ Error parsing: ${event.data}`);
+                            }
+                        };
+                        subscribedTopics[topic].onerror = function() {
+                            console.warn(`🔄 SSE connection lost for ${topic}. Reconnecting...`);
+                            setStatus(`🔄 SSE connection lost for ${topic}. Reconnecting...`);
+                            delete subscribedTopics[topic]; // Remove and let it try to reconnect on next attempt
+                            setTimeout(() => {
+                                if (!subscribedTopics[topic]) {
+                                    subscribedTopics[topic] = new EventSource(`/stream?topic=${encodeURIComponent(topic)}`);
+                                    // You might want to re-attach the event handlers here
+                                    subscribedTopics[topic].onmessage = this.onmessage;
+                                    subscribedTopics[topic].onerror = this.onerror;
+                                }
+                            }, 3000);
+                        };
+                    } else if (action === 'unsubscribe') {
+                        if (!subscribedTopics[topic]) {
+                            alert(`Not subscribed to ${topic}.`);
+                            return;
+                        }
+                        const res = await fetch(`/unsubscribe`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ topic })
+                        });
+                        if (!res.ok) {
+                            const errorText = await res.text();
+                            alert(`❌ Error: ${errorText}`);
+                            return;
+                        }
+                        const data = await res.json();
+                        alert(`🔕 Unsubscribed from ${topic}: ${data.message}`);
+                        setStatus(`🔕 Unsubscribed from ${topic}`);
+
+                        if (subscribedTopics[topic]) {
+                            subscribedTopics[topic].close();
+                            delete subscribedTopics[topic];
+                        }
+                    }
+                } catch (e) {
+                    alert(`❌ Request failed: ${e.message}`);
+                }
+            }
+
+            const subscribeButton = document.querySelector('button.subscribe');
+            const unsubscribeButton = document.querySelector('button.unsubscribe');
+
+            subscribeButton.addEventListener('click', () => sendSubscription('subscribe'));
+            unsubscribeButton.addEventListener('click', () => sendSubscription('unsubscribe'));
+        };
+    </script>
+</head>
+<body>
+    <div class="container">
+        <h1>Smart City Data Stream</h1>
+        <div class="controls">
+            <select id="topic">
+                <option value="air_quality">Air Quality</option>
+                <option value="traffic">Traffic</option>
+                <option value="weather">Weather</option>
+            </select>
+            <button class="subscribe">Subscribe</button>
+            <button class="unsubscribe">Unsubscribe</button>
+        </div>
+        <div class="log-container">
+            <div class="log-title">Live Stream:</div>
+            <div id="log">Waiting for messages...</div>
+        </div>
+    </div>
+</body>
+</html>

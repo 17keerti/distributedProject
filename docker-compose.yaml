@@ -1,0 +1,108 @@
+services:
+  broker:
+    build:
+      context: .
+      dockerfile: broker/Dockerfile
+    container_name: broker
+    ports:
+      - "5001:5001"
+    environment:
+      - PYTHONPATH=/app
+      - BROKER_ID=1
+    command: python app.py
+
+  broker2:
+    build:
+      context: .
+      dockerfile: broker/Dockerfile
+    container_name: broker2
+    ports:
+      - "5002:5001"
+    environment:
+      - PYTHONPATH=/app
+      - BROKER_ID=2
+    command: python app.py
+
+  broker3:
+    build:
+      context: .
+      dockerfile: broker/Dockerfile
+    container_name: broker3
+    ports:
+      - "5003:5001"
+    environment:
+      - PYTHONPATH=/app
+      - BROKER_ID=3
+    command: python app.py
+
+    
+  air_quality_publisher:
+    build:
+      context: ./publishers/air_quality
+    container_name: air_quality_publisher
+    depends_on:
+      - broker
+    restart: on-failure
+    command: python air_quality_publisher.py
+
+  traffic_publisher:
+    build:
+      context: ./publishers/traffic
+    container_name: traffic_publisher
+    depends_on:
+      - broker
+    restart: on-failure
+    command: python traffic_publisher.py
+
+  weather_publisher:
+    build:
+      context: ./publishers/weather
+    container_name: weather_publisher
+    depends_on:
+      - broker
+    restart: on-failure
+    command: python weather_publisher.py
+
+  environmental_monitor:
+    build:
+      context: ./subscribers/environmental_monitor
+    container_name: environmental_monitor
+    depends_on:
+      - broker
+    restart: on-failure
+    ports:
+      - "6002:5002"
+    command: python environmental_monitor.py
+
+  traffic_manager:
+    build:
+      context: ./subscribers/traffic_manager
+    container_name: traffic_manager
+    depends_on:
+      - broker
+    restart: on-failure
+    ports:
+      - "6003:5003"
+    command: python traffic_manager.py
+
+  public_interface:
+    build:
+      context: ./subscribers/public_interface
+    container_name: public_interface
+    depends_on:
+      - broker
+    restart: on-failure
+    ports:
+      - "6004:5004"
+    command: python public_interface.py
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: frontend
+    ports:
+      - "6001:6001"
+    depends_on:
+      - broker
+    restart: on-failure
+    command: python app.py
