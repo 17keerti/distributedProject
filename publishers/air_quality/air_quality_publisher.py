@@ -9,9 +9,27 @@ AIR_QUALITY_URL = (
     f"latitude={LAT}&longitude={LON}&hourly=pm10,carbon_monoxide,ozone"
 )
 
-BROKER_URL = "http://broker:5001/publish"
 TOPIC = "air_quality"
-# PUBLISHER_ID = "air_sensor_1"
+
+KNOWN_BROKERS = {
+    1: "broker:5001",
+    2: "broker2:5001",
+    3: "broker3:5001",
+}
+
+def get_current_leader():
+    for broker_id, broker_url in KNOWN_BROKERS.items():
+        try:
+            print(f"🔍 Trying {broker_url} for leader info...")
+            res = requests.get(f"http://{broker_url}/get_leader", timeout=2)
+            if res.status_code == 200:
+                leader_id = res.json().get("leader_id")
+                print(f"📢 Leader ID found via {broker_url}: {leader_id}")
+                return leader_id
+        except Exception as e:
+            print(f"⚠️ Failed to contact {broker_url}: {e}")
+    return None
+
 
 def get_air_quality_data():
     try:
@@ -49,7 +67,22 @@ def publish_air_quality():
         }
 
         try:
-            response = requests.post(BROKER_URL, json=message)
+            print("🔄 Trying to fetch leader info...")
+            leader_id = get_current_leader()
+            if not leader_id:
+                print("❌ Could not determine leader.")
+                return
+
+            leader_url = KNOWN_BROKERS.get(leader_id)
+            if not leader_url:
+                print("❌ Unknown leader ID:", leader_id)
+                return
+
+            publish_url = f"http://{leader_url}/publish" # Dynamically determine URL
+            print(f"➡️ Publishing to leader at {publish_url}")
+            print(f"📦 Payload: {message}")
+
+            response = requests.post(publish_url, json=message)
             response.raise_for_status()
             print("🌫️ Published air quality data:", message)
         except Exception as e:

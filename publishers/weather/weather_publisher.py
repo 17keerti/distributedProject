@@ -14,6 +14,20 @@ KNOWN_BROKERS = {
     3: "broker3:5001",
 }
 
+def get_current_leader():
+    for broker_id, broker_url in KNOWN_BROKERS.items():
+        try:
+            print(f"🔍 Trying {broker_url} for leader info...")
+            res = requests.get(f"http://{broker_url}/get_leader", timeout=2)
+            if res.status_code == 200:
+                leader_id = res.json().get("leader_id")
+                print(f"📢 Leader ID via {broker_url}: {leader_id}")
+                return leader_id
+        except Exception as e:
+            print(f"⚠️ Failed to contact {broker_url}: {e}")
+    return None
+
+
 def get_weather_data():
     try:
         response = requests.get(API_URL, timeout=5)
@@ -30,19 +44,6 @@ def get_weather_data():
     except requests.RequestException as e:
         print(f"❌ Error fetching weather data: {e}")
         return None
-
-def get_current_leader():
-    for broker_id, broker_url in KNOWN_BROKERS.items():
-        try:
-            print(f"🔍 Trying {broker_url} for leader info...")
-            res = requests.get(f"http://{broker_url}/get_leader", timeout=2)
-            if res.status_code == 200:
-                leader_id = res.json().get("leader_id")
-                print(f"📢 Leader ID via {broker_url}: {leader_id}")
-                return leader_id
-        except Exception as e:
-            print(f"⚠️ Failed to contact {broker_url}: {e}")
-    return None
 
 def publish_weather():
     weather = get_weather_data()

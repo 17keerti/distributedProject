@@ -23,7 +23,7 @@ def get_current_leader():
             print(f"⚠️ Failed to contact {broker_url}: {e}")
     return None
 
-while True:
+def publish_traffic():  # Renamed to publish_traffic
     congestion = random.choice(["low", "medium", "high"])
     priority = {"low": 2, "medium": 1, "high": 0}[congestion]
 
@@ -42,14 +42,12 @@ while True:
         leader_id = get_current_leader()
         if not leader_id:
             print("❌ Could not determine leader.")
-            time.sleep(10)
-            continue
+            return
 
         leader_url = KNOWN_BROKERS.get(leader_id)
         if not leader_url:
             print("❌ Unknown leader ID:", leader_id)
-            time.sleep(10)
-            continue
+            return
 
         publish_url = f"http://{leader_url}/publish"
         print(f"➡️ Publishing to leader at {publish_url}")
@@ -62,4 +60,7 @@ while True:
     except Exception as e:
         print("❌ Failed to publish traffic:", e)
 
-    time.sleep(10)
+if __name__ == "__main__":
+    while True:
+        publish_traffic()  # Changed to publish_traffic
+        time.sleep(20)
