@@ -1,6 +1,7 @@
 import json
 import time
 import requests
+from utils.lamport_clock import LamportClock
 
 # Configs
 LAT, LON = 37.3541, -121.9552
@@ -10,6 +11,8 @@ AIR_QUALITY_URL = (
 )
 
 TOPIC = "air_quality"
+clock = LamportClock()
+
 
 KNOWN_BROKERS = {
     1: "broker:5001",
@@ -42,6 +45,7 @@ def get_air_quality_data():
             "pm10": data["hourly"]["pm10"][0],
             "carbon_monoxide": data["hourly"]["carbon_monoxide"][0],
             "ozone": data["hourly"]["ozone"][0],
+            "lamport_ts": clock.tick()  # Lamport logical time
         }
         return latest
     except requests.RequestException as e:

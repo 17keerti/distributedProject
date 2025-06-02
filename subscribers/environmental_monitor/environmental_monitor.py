@@ -2,6 +2,8 @@ from flask import Flask
 import requests
 import time
 import threading
+from utils.lamport_clock import LamportClock
+import json
 
 app = Flask(__name__)
 
@@ -10,12 +12,14 @@ PORT = 5004
 SERVICE_NAME = "environmental_monitor"
 KNOWN_BROKER = "broker:5001"  # Known broker to ask for the current leader
 
-# Mapping of broker leader_id to service URLs
 LEADER_URL_MAP = {
     1: "broker:5001",
     2: "broker2:5001",
     3: "broker3:5001",
 }
+
+# Instantiate Lamport clock
+clock = LamportClock()
 
 def get_current_leader_url():
     try:
@@ -43,8 +47,21 @@ def listen_to_stream(topic):
 
             for line in response.iter_lines(decode_unicode=True):
                 if line.startswith("data:"):
-                    data = line[len("data:"):].strip()
-                    print(f"📥 [ENVIRONMENTAL MONITOR] Received SSE for '{topic}': {data}", flush=True)
+                    raw_data = line[len("data:"):].strip()
+                    try:
+                        json_data = json.loads(raw_data)
+                        lamport_ts = json_data["data"].get("lamport_ts")
+                        if lamport_ts is not None:
+                            clock.receive(lamport_ts)
+                        else:
+                            clock.tick()
+
+                        print(
+                            f"📥 [ENVIRONMENTAL MONITOR] Received SSE for '{topic}': {raw_data} | Lamport Clock: {clock.get_time()}",
+                            flush=True
+                        )
+                    except Exception as err:
+                        print(f"❌ Error decoding message: {err}", flush=True)
         except Exception as e:
             print(f"⚠️ SSE connection error for topic '{topic}': {e}", flush=True)
             time.sleep(5)

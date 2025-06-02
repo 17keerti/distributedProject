@@ -1,6 +1,7 @@
 import requests
 import time
 import random
+from utils.lamport_clock import LamportClock
 
 KNOWN_BROKERS = {
     1: "broker:5001",
@@ -9,6 +10,7 @@ KNOWN_BROKERS = {
 }
 
 TOPIC = "traffic"
+clock = LamportClock()
 
 def get_current_leader():
     for broker_id, broker_url in KNOWN_BROKERS.items():
@@ -26,13 +28,15 @@ def get_current_leader():
 def publish_traffic():  # Renamed to publish_traffic
     congestion = random.choice(["low", "medium", "high"])
     priority = {"low": 2, "medium": 1, "high": 0}[congestion]
+    clock.tick()
 
     traffic_data = {
         "topic": TOPIC,
         "data": {
             "congestion": congestion,
             "accident_reported": random.choice([True, False]),
-            "location": "Main St"
+            "location": "Main St",
+            "lamport_ts": clock.get_time()
         },
         "priority": priority,
     }

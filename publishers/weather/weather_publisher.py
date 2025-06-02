@@ -2,10 +2,12 @@ import json
 import time
 import requests
 import random
+from utils.lamport_clock import LamportClock
 
 CITY = "Santa Clara"
 API_URL = f"https://wttr.in/{CITY}?format=j1"
 TOPIC = "weather"
+clock = LamportClock()
 
 # Known broker URLs to try for leader discovery and publishing
 KNOWN_BROKERS = {
@@ -38,7 +40,8 @@ def get_weather_data():
             "temperature": data['current_condition'][0]['temp_C'],
             "humidity": data['current_condition'][0]['humidity'],
             "description": data['current_condition'][0]['weatherDesc'][0]['value'],
-            "timestamp": time.time()
+            "timestamp": time.time(),  # wall-clock
+            "lamport_ts": clock.tick()  # Lamport logical time
         }
         return weather_data
     except requests.RequestException as e:

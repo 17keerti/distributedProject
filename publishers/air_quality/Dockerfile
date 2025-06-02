@@ -2,12 +2,11 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-COPY . .
+COPY publishers/air_quality/air_quality_publisher.py .
+COPY utils ./utils
 
 RUN pip install flask requests
 
-# Expose default port (can override in docker-compose)
-EXPOSE 5000
 
 # Replace the .py file with the actual one per component using docker-compose `command`
 CMD ["python", "air_quality_publisher.py"]
