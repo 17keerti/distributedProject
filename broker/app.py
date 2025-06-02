@@ -265,7 +265,7 @@ def get_leader():
 
 @app.route('/start_election', methods=['POST'])
 def start_election():
-    election.start_election()
+    leader_election.start_election()
     return jsonify({"status": "started"}), 200
 
 # --- Debug / Health ---
