@@ -1,9 +1,8 @@
-import json
 import time
 import requests
 from utils.lamport_clock import LamportClock
 
-# Configs
+# Configuration for San Jose, CA (can be updated)
 LAT, LON = 37.3541, -121.9552
 AIR_QUALITY_URL = (
     f"https://air-quality-api.open-meteo.com/v1/air-quality?"
@@ -13,7 +12,7 @@ AIR_QUALITY_URL = (
 TOPIC = "air_quality"
 clock = LamportClock()
 
-
+# Known broker endpoints
 KNOWN_BROKERS = {
     1: "broker:5001",
     2: "broker2:5001",
@@ -21,6 +20,10 @@ KNOWN_BROKERS = {
 }
 
 def get_current_leader():
+    """
+    Query all known brokers to determine the current leader.
+    Returns the broker ID of the leader if found, else None.
+    """
     for broker_id, broker_url in KNOWN_BROKERS.items():
         try:
             print(f"🔍 Trying {broker_url} for leader info...")
@@ -33,8 +36,11 @@ def get_current_leader():
             print(f"⚠️ Failed to contact {broker_url}: {e}")
     return None
 
-
 def get_air_quality_data():
+    """
+    Fetch current air quality data from Open-Meteo.
+    Returns a dictionary with metrics and Lamport timestamp.
+    """
     try:
         response = requests.get(AIR_QUALITY_URL)
         response.raise_for_status()
@@ -45,7 +51,7 @@ def get_air_quality_data():
             "pm10": data["hourly"]["pm10"][0],
             "carbon_monoxide": data["hourly"]["carbon_monoxide"][0],
             "ozone": data["hourly"]["ozone"][0],
-            "lamport_ts": clock.tick()  # Lamport logical time
+            "lamport_ts": clock.tick()
         }
         return latest
     except requests.RequestException as e:
@@ -53,21 +59,22 @@ def get_air_quality_data():
         return None
 
 def publish_air_quality():
+    """
+    Publish air quality data to the leader broker with appropriate priority.
+    """
     air_data = get_air_quality_data()
     if air_data:
-        # Define severity condition (can be adjusted based on thresholds)
+        # Determine severity and assign priority
         pm10 = air_data["pm10"]
         co = air_data["carbon_monoxide"]
         ozone = air_data["ozone"]
-
         severe = pm10 > 80 or co > 5 or ozone > 180
         priority = 0 if severe else 2
 
         message = {
             "topic": TOPIC,
             "data": air_data,
-            "priority": priority,
-            # "publisher_id": PUBLISHER_ID
+            "priority": priority
         }
 
         try:
@@ -82,13 +89,14 @@ def publish_air_quality():
                 print("❌ Unknown leader ID:", leader_id)
                 return
 
-            publish_url = f"http://{leader_url}/publish" # Dynamically determine URL
+            publish_url = f"http://{leader_url}/publish"
             print(f"➡️ Publishing to leader at {publish_url}")
             print(f"📦 Payload: {message}")
 
             response = requests.post(publish_url, json=message)
             response.raise_for_status()
-            print("🌫️ Published air quality data:", message)
+
+            print("🌫️ Published air quality data successfully.")
         except Exception as e:
             print("❌ Failed to publish air data:", e)
     else:
@@ -97,4 +105,5 @@ def publish_air_quality():
 if __name__ == "__main__":
     while True:
         publish_air_quality()
-        time.sleep(20)  # Adjust frequency as needed
+        # Publish every 10 seconds
+        time.sleep(10)  

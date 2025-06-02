@@ -3,6 +3,7 @@ import time
 import random
 from utils.lamport_clock import LamportClock
 
+# Known broker addresses mapped by broker ID
 KNOWN_BROKERS = {
     1: "broker:5001",
     2: "broker2:5001",
@@ -13,6 +14,10 @@ TOPIC = "traffic"
 clock = LamportClock()
 
 def get_current_leader():
+    """
+    Query all known brokers to determine the current leader.
+    Returns the broker ID of the leader if found, else None.
+    """
     for broker_id, broker_url in KNOWN_BROKERS.items():
         try:
             print(f"🔍 Trying {broker_url} for leader info...")
@@ -25,7 +30,10 @@ def get_current_leader():
             print(f"⚠️ Failed to contact {broker_url}: {e}")
     return None
 
-def publish_traffic():  # Renamed to publish_traffic
+def publish_traffic():
+    """
+    Simulates a traffic event and publishes it to the leader broker with priority and Lamport timestamp.
+    """
     congestion = random.choice(["low", "medium", "high"])
     priority = {"low": 2, "medium": 1, "high": 0}[congestion]
     clock.tick()
@@ -66,5 +74,7 @@ def publish_traffic():  # Renamed to publish_traffic
 
 if __name__ == "__main__":
     while True:
-        publish_traffic()  # Changed to publish_traffic
-        time.sleep(20)
+        publish_traffic()
+        # Publish every 10 seconds
+        time.sleep(10)  
+
