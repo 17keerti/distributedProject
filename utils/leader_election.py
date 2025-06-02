@@ -107,6 +107,24 @@ class LeaderElection:
         with self.lock:
             return self.current_leader
 
+    def start_health_monitor(self, current_leader_getter):
+        def monitor():
+            while True:
+                time.sleep(5)
+                leader_id = current_leader_getter()
+                if leader_id is None or leader_id == self.broker_id:
+                    continue
+                for peer_url, peer_id in self.known_peers.items():
+                    if peer_id == leader_id:
+                        try:
+                            res = requests.get(f"http://{peer_url}/ping", timeout=2)
+                            if res.status_code != 200:
+                                raise Exception("Bad response")
+                        except Exception as e:
+                            print(f"💥 Leader {leader_id} not responding: {e}. Initiating election.", flush=True)
+                            self.start_election()
+        threading.Thread(target=monitor, daemon=True).start()
+
     def reset(self):
         with self.lock:
             self.current_leader = None

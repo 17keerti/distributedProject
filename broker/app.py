@@ -42,6 +42,7 @@ def on_leader_update(new_leader):
     print(f"👑 Leader updated to broker {new_leader}", flush=True)
 
 leader_election = LeaderElection(BROKER_ID, known_peers, on_leader_update)
+leader_election.start_health_monitor(lambda: CURRENT_LEADER)
 
 
 # --- SSE Streaming Endpoint ---
@@ -63,7 +64,7 @@ def stream(topic):
                 yield f"data: {msg}\n\n"
         except GeneratorExit:
             sse_clients[topic].remove(q)
-            sse_subscribers[topic].discard(client_ip)  # 🔧 This line is crucial
+            sse_subscribers[topic].discard(client_ip)
             sse_unsubscribed[topic].add(client_ip)
             print(f"🔕 SSE client disconnected from topic: {topic}", flush=True)
 
@@ -222,6 +223,10 @@ def health_check():
 @app.route('/logs/<topic>', methods=['GET'])
 def view_logs(topic):
     return jsonify({"topic": topic, "logs": logs.get(topic, [])}), 200
+
+@app.route('/ping', methods=['GET'])
+def ping():
+    return jsonify({"status": "alive"}), 200   
 
 # --- Start Gossip Background Thread ---
 start_gossip_thread(sse_subscribers, sse_unsubscribed, known_peers)
