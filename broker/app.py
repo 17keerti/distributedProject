@@ -8,17 +8,22 @@ import os
 import queue
 from utils.leader_election import LeaderElection
 
+app = Flask(__name__)
+
+# --- Broker Configuration ---
+BROKER_ID = int(os.environ.get("BROKER_ID", "1"))
+CURRENT_LEADER = None
+
+# --- State Management ---
 subscriptions = defaultdict(list)
 unsubscribed = defaultdict(set)
-sse_clients = defaultdict(list)
-sse_subscribers = defaultdict(set)
-sse_unsubscribed = defaultdict(set)
+sse_clients = defaultdict(list)                      # Active SSE queues per topic
+sse_subscribers = defaultdict(set)                  # Subscribed client IPs per topic
+sse_unsubscribed = defaultdict(set)                 # Recently unsubscribed clients per topic
 message_queues = defaultdict(lambda: {"high": deque(), "low": deque()})
-logs = defaultdict(list)
+logs = defaultdict(list)                            # Topic-wise message logs
 
-app = Flask(__name__)
-BROKER_ID = int(os.environ.get("BROKER_ID", "1"))
-
+# --- Peer Awareness ---
 def get_known_peers(my_id):
     all_peers = {
         1: "broker:5001",
@@ -28,8 +33,8 @@ def get_known_peers(my_id):
     return {url: id for id, url in all_peers.items() if id != my_id}
 
 known_peers = get_known_peers(BROKER_ID)
-CURRENT_LEADER = None
 
+# --- Leader Election Handler ---
 def on_leader_update(new_leader):
     global CURRENT_LEADER
     CURRENT_LEADER = new_leader
@@ -37,15 +42,17 @@ def on_leader_update(new_leader):
 
 leader_election = LeaderElection(BROKER_ID, known_peers, on_leader_update)
 
+
+# --- SSE Streaming Endpoint ---
 @app.route('/stream/<topic>')
 def stream(topic):
     def event_stream():
         q = queue.Queue()
         sse_clients[topic].append(q)
         client_ip = request.remote_addr
-
         print(f"🔔 SSE client connected to topic: {topic} from {client_ip}", flush=True)
 
+        # Update subscriber state
         sse_subscribers[topic].add(client_ip)
         sse_unsubscribed[topic].discard(client_ip)
 
@@ -62,6 +69,7 @@ def stream(topic):
     return Response(stream_with_context(event_stream()), content_type='text/event-stream')
 
 
+# --- SSE Subscribe Endpoint ---
 @app.route('/subscribe', methods=['POST'])
 def subscribe():
     data = request.get_json(force=True)
@@ -90,6 +98,7 @@ def subscribe():
     return jsonify({"error": f"Unsupported subscription mode: {mode}"}), 400
 
 
+# --- SSE Unsubscribe Endpoint ---
 @app.route('/unsubscribe', methods=['POST'])
 def unsubscribe():
     data = request.get_json(force=True)
@@ -119,6 +128,7 @@ def unsubscribe():
     return jsonify({"error": f"Unsupported unsubscription mode: {mode}"}), 400
 
 
+# --- Publish Messages ---
 @app.route('/publish', methods=['POST'])
 def publish():
     data = request.get_json(force=True)
@@ -129,6 +139,7 @@ def publish():
     if not topic:
         return jsonify({"error": "No topic specified"}), 400
 
+    # Forward to leader if not self
     if CURRENT_LEADER and CURRENT_LEADER != BROKER_ID:
         leader_url = {
             1: "http://broker:5001",
@@ -144,6 +155,7 @@ def publish():
         else:
             return jsonify({"error": "Unknown leader ID"}), 500
 
+    # Enqueue message locally
     message_queues[topic][priority].append(data)
     logs[topic].append(data)
     if len(logs[topic]) > 1000:
@@ -152,6 +164,7 @@ def publish():
     print(f"\n📬 Received message for topic '{topic}' with priority '{priority}'")
     print(f"Queue state: {[(p, len(q)) for p, q in message_queues[topic].items()]}", flush=True)
 
+    # Dispatch to SSE clients
     for priority_level in ["high", "low"]:
         while message_queues[topic][priority_level]:
             message = message_queues[topic][priority_level].popleft()
@@ -164,6 +177,7 @@ def publish():
     return '', 200
 
 
+# --- Gossip Receive Endpoint ---
 @app.route('/gossip', methods=['POST'])
 def receive_gossip():
     incoming_sse = request.json.get("sse_subscribers", {})
@@ -185,39 +199,7 @@ def receive_gossip():
     return "OK", 200
 
 
-@app.route('/health', methods=['GET'])
-def health_check():
-    return "OK", 200
-
-@app.route('/logs/<topic>', methods=['GET'])
-def view_logs(topic):
-    return jsonify({"topic": topic, "logs": logs.get(topic, [])}), 200
-
-
-@app.route('/election', methods=['POST'])
-def election():
-    data = request.get_json(force=True)
-    sender_id = int(data.get("broker_id"))
-    print(f"⚡ Received election from broker {sender_id}", flush=True)
-    if BROKER_ID > sender_id:
-        return jsonify({"response": "OK"}), 200
-    return jsonify({"response": "NO"}), 200
-
-
-@app.route('/leader', methods=['POST'])
-def leader_announcement():
-    data = request.get_json(force=True)
-    leader_id = int(data.get("leader_id"))
-    leader_election.update_leader(leader_id)
-    return '', 200
-
-
-@app.route('/get_leader', methods=['GET'])
-def get_leader():
-    print(f"📥 Received /get_leader request. Returning {leader_election.get_leader()}", flush=True)
-    return jsonify({"leader_id": leader_election.get_leader()}), 200
-
-
+# --- Gossip Loop ---
 def gossip_loop():
     while True:
         time.sleep(10)
@@ -253,9 +235,32 @@ def gossip_loop():
                 print(f"⚠️ Gossip to {peer} failed: {e}", flush=True)
                 known_peers.pop(peer, None)
 
-        # ✅ Now safe to clear unsubscribed state
         sse_unsubscribed.clear()
 
+
+# --- Leader Election Endpoints ---
+@app.route('/election', methods=['POST'])
+def election():
+    data = request.get_json(force=True)
+    sender_id = int(data.get("broker_id"))
+    print(f"⚡ Received election from broker {sender_id}", flush=True)
+    if BROKER_ID > sender_id:
+        return jsonify({"response": "OK"}), 200
+    return jsonify({"response": "NO"}), 200
+
+
+@app.route('/leader', methods=['POST'])
+def leader_announcement():
+    data = request.get_json(force=True)
+    leader_id = int(data.get("leader_id"))
+    leader_election.update_leader(leader_id)
+    return '', 200
+
+
+@app.route('/get_leader', methods=['GET'])
+def get_leader():
+    print(f"📥 Received /get_leader request. Returning {leader_election.get_leader()}", flush=True)
+    return jsonify({"leader_id": leader_election.get_leader()}), 200
 
 
 @app.route('/start_election', methods=['POST'])
@@ -263,7 +268,17 @@ def start_election():
     election.start_election()
     return jsonify({"status": "started"}), 200
 
+# --- Debug / Health ---
+@app.route('/health', methods=['GET'])
+def health_check():
+    return "OK", 200
 
+@app.route('/logs/<topic>', methods=['GET'])
+def view_logs(topic):
+    return jsonify({"topic": topic, "logs": logs.get(topic, [])}), 200
+
+
+# --- Main Startup ---
 if __name__ == '__main__':
     print(f"🚀 Broker {BROKER_ID} running on port 5001...", flush=True)
     threading.Thread(target=gossip_loop, daemon=True).start()
