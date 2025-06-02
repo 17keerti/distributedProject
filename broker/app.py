@@ -162,8 +162,7 @@ def publish():
         logs[topic] = logs[topic][-1000:]
 
     print(f"\n📬 Received message for topic '{topic}' with priority '{priority}'")
-    print(f"Queue state: {[(p, len(q)) for p, q in message_queues[topic].items()]}", flush=True)
-
+    
     # Dispatch to SSE clients
     for priority_level in ["high", "low"]:
         while message_queues[topic][priority_level]:
