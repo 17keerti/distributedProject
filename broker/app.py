@@ -55,6 +55,8 @@ def stream(topic):
                 yield f"data: {msg}\n\n"
         except GeneratorExit:
             sse_clients[topic].remove(q)
+            sse_subscribers[topic].discard(client_ip)  # 🔧 This line is crucial
+            sse_unsubscribed[topic].add(client_ip)
             print(f"🔕 SSE client disconnected from topic: {topic}", flush=True)
 
     return Response(stream_with_context(event_stream()), content_type='text/event-stream')
@@ -222,38 +224,38 @@ def gossip_loop():
         if not known_peers:
             continue
 
+        payload = {
+            "sse_subscribers": {
+                topic: list(addrs - sse_unsubscribed[topic])
+                for topic, addrs in sse_subscribers.items()
+            },
+            "unsubscribed": {
+                topic: list(sse_unsubscribed[topic])
+                for topic in sse_unsubscribed
+                if sse_unsubscribed[topic]
+            }
+        }
+
         for peer in list(known_peers.keys()):
             try:
-                payload = {
-                    "sse_subscribers": {
-                        topic: list(addrs - sse_unsubscribed[topic])
-                        for topic, addrs in sse_subscribers.items()
-                    },
-                    "unsubscribed": {
-                        topic: list(sse_unsubscribed[topic])
-                        for topic in sse_unsubscribed
-                        if sse_unsubscribed[topic]
-                    }
-                }
-
                 print(f"🔄 Preparing to send gossip to {peer}:")
-                if payload["sse_subscribers"]:
-                    print(f"  📡 sse_subscribers:")
-                    for topic, clients in payload["sse_subscribers"].items():
-                        print(f"    - {topic}: {clients}")
-                if payload["unsubscribed"]:
-                    print(f"  ❌ unsubscribed:")
-                    for topic, clients in payload["unsubscribed"].items():
-                        print(f"    - {topic}: {clients}")
+                for topic, clients in payload["sse_subscribers"].items():
+                    print(f"    📡 {topic}: {clients}")
+                for topic, removed in payload["unsubscribed"].items():
+                    print(f"    ❌ {topic}: {removed}")
                 if not payload["sse_subscribers"] and not payload["unsubscribed"]:
-                    print(f"  ⛔ Nothing to gossip.")
+                    print("    ⛔ Nothing to gossip.")
 
                 res = requests.post(f"http://{peer}/gossip", json=payload, timeout=3)
-                sse_unsubscribed.clear()
                 print(f"📣 Sent gossip to {peer} – status: {res.status_code}", flush=True)
+
             except Exception as e:
                 print(f"⚠️ Gossip to {peer} failed: {e}", flush=True)
                 known_peers.pop(peer, None)
+
+        # ✅ Now safe to clear unsubscribed state
+        sse_unsubscribed.clear()
+
 
 
 @app.route('/start_election', methods=['POST'])
