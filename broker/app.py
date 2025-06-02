@@ -8,16 +8,15 @@ import os
 import queue
 from utils.leader_election import LeaderElection
 
-# Subscriptions and state tracking
 subscriptions = defaultdict(list)
 unsubscribed = defaultdict(set)
 sse_clients = defaultdict(list)
+sse_subscribers = defaultdict(set)
+sse_unsubscribed = defaultdict(set)
 message_queues = defaultdict(lambda: {"high": deque(), "low": deque()})
 logs = defaultdict(list)
-broker_state = {"topics": defaultdict(set)}
 
 app = Flask(__name__)
-
 BROKER_ID = int(os.environ.get("BROKER_ID", "1"))
 
 def get_known_peers(my_id):
@@ -29,7 +28,6 @@ def get_known_peers(my_id):
     return {url: id for id, url in all_peers.items() if id != my_id}
 
 known_peers = get_known_peers(BROKER_ID)
-
 CURRENT_LEADER = None
 
 def on_leader_update(new_leader):
@@ -44,13 +42,18 @@ def stream(topic):
     def event_stream():
         q = queue.Queue()
         sse_clients[topic].append(q)
-        print(f"🔔 SSE client connected to topic: {topic}", flush=True)
+        client_ip = request.remote_addr
+
+        print(f"🔔 SSE client connected to topic: {topic} from {client_ip}", flush=True)
+
+        sse_subscribers[topic].add(client_ip)
+        sse_unsubscribed[topic].discard(client_ip)
+
         try:
             while True:
-                msg = q.get()  # wait for new message
+                msg = q.get()
                 yield f"data: {msg}\n\n"
         except GeneratorExit:
-            # Client disconnected
             sse_clients[topic].remove(q)
             print(f"🔕 SSE client disconnected from topic: {topic}", flush=True)
 
@@ -61,68 +64,57 @@ def stream(topic):
 def subscribe():
     data = request.get_json(force=True)
     topic = data.get("topic")
-    mode = data.get("mode") # Get the mode
+    mode = data.get("mode")
 
     if not topic:
         return jsonify({"error": "Missing topic"}), 400
 
     if mode == "sse":
-        # For SSE, we don't need a specific URL to send to.
-        # The client will listen on the /stream/<topic> endpoint.
         print(f"✅ SSE subscription requested for topic '{topic}'", flush=True)
-        # We might want to track that a topic has SSE subscribers, though
-        # the actual sending happens via the /stream endpoint.
-        if "sse_subscribers" not in broker_state["topics"]:
-            broker_state["topics"]["sse_subscribers"] = defaultdict(set)
-        broker_state["topics"]["sse_subscribers"][topic].add(request.remote_addr) # Or some identifier
+        sse_subscribers[topic].add(request.remote_addr)
+        sse_unsubscribed[topic].discard(request.remote_addr)
         return jsonify({"message": f"Subscribed to topic '{topic}' via SSE"}), 200
-    elif mode == "webhook" or not mode: # Handle webhook or default case
+
+    elif mode == "webhook" or not mode:
         url = data.get("url")
         if not url:
             return jsonify({"error": "Missing URL for webhook subscription"}), 400
         if url not in subscriptions[topic]:
             subscriptions[topic].append(url)
-            broker_state["topics"][topic].add(url)
             unsubscribed[topic].discard(url)
             print(f"✅ Webhook subscriber subscribed to '{topic}' at {url}", flush=True)
         return jsonify({"message": f"Subscribed to topic '{topic}' (webhook)"}), 200
-    else:
-        return jsonify({"error": f"Unsupported subscription mode: {mode}"}), 400
 
+    return jsonify({"error": f"Unsupported subscription mode: {mode}"}), 400
 
 
 @app.route('/unsubscribe', methods=['POST'])
 def unsubscribe():
-    data = request.get_json()
-    topic = data.get('topic')
-    mode = data.get('mode') # Get the mode
+    data = request.get_json(force=True)
+    topic = data.get("topic")
+    mode = data.get("mode")
 
     if not topic:
         return jsonify({"error": "Missing topic"}), 400
 
     if mode == "sse":
-        # For SSE, we don't have a specific URL to unsubscribe.
-        # We can just acknowledge the unsubscription.
         print(f"🔕 SSE unsubscription requested for topic '{topic}'", flush=True)
-        if "sse_subscribers" in broker_state["topics"] and topic in broker_state["topics"]["sse_subscribers"]:
-            if request.remote_addr in broker_state["topics"]["sse_subscribers"][topic]:
-                broker_state["topics"]["sse_subscribers"][topic].discard(request.remote_addr)
-                print(f"🔕 Removed SSE subscriber for '{topic}' from {request.remote_addr}")
+        sse_subscribers[topic].discard(request.remote_addr)
+        sse_unsubscribed[topic].add(request.remote_addr)
         return jsonify({"message": f"Unsubscribed from topic '{topic}' (SSE)"}), 200
+
     elif mode == "webhook" or not mode:
-        url = data.get('url')
+        url = data.get("url")
         if not url:
             return jsonify({"error": "Missing URL for webhook unsubscription"}), 400
         if topic in subscriptions and url in subscriptions[topic]:
             subscriptions[topic].remove(url)
-            broker_state["topics"][topic].discard(url)
             unsubscribed[topic].add(url)
             print(f"🛑 Unsubscribed: {url} from '{topic}' (webhook)")
             return jsonify({"message": f"Unsubscribed from topic '{topic}' (webhook)"}), 200
-        else:
-            return jsonify({"message": f"Not subscribed to '{topic}' with URL '{url}'"}), 200
-    else:
-        return jsonify({"error": f"Unsupported unsubscription mode: {mode}"}), 400
+        return jsonify({"message": f"Not subscribed to '{topic}' with URL '{url}'"}), 200
+
+    return jsonify({"error": f"Unsupported unsubscription mode: {mode}"}), 400
 
 
 @app.route('/publish', methods=['POST'])
@@ -135,7 +127,6 @@ def publish():
     if not topic:
         return jsonify({"error": "No topic specified"}), 400
 
-    # Redirect to leader if not self
     if CURRENT_LEADER and CURRENT_LEADER != BROKER_ID:
         leader_url = {
             1: "http://broker:5001",
@@ -151,7 +142,6 @@ def publish():
         else:
             return jsonify({"error": "Unknown leader ID"}), 500
 
-    # Leader handles publishing locally
     message_queues[topic][priority].append(data)
     logs[topic].append(data)
     if len(logs[topic]) > 1000:
@@ -160,17 +150,9 @@ def publish():
     print(f"\n📬 Received message for topic '{topic}' with priority '{priority}'")
     print(f"Queue state: {[(p, len(q)) for p, q in message_queues[topic].items()]}", flush=True)
 
-    subscribers = subscriptions.get(topic, [])
     for priority_level in ["high", "low"]:
         while message_queues[topic][priority_level]:
             message = message_queues[topic][priority_level].popleft()
-            for url in subscribers:
-                try:
-                    requests.post(url, json=message, timeout=1)
-                    print(f"➡️ Sent to {url} [{priority_level}]", flush=True)
-                except Exception as e:
-                    print(f"❌ Failed to send to {url}: {e}", flush=True)
-            # Also push to SSE clients
             for q in sse_clients[topic]:
                 try:
                     q.put(jsonify(message).get_data(as_text=True))
@@ -180,6 +162,26 @@ def publish():
     return '', 200
 
 
+@app.route('/gossip', methods=['POST'])
+def receive_gossip():
+    incoming_sse = request.json.get("sse_subscribers", {})
+    incoming_unsubs = request.json.get("unsubscribed", {})
+
+    print(f"🤝 Received gossip update:", flush=True)
+    for topic, clients in incoming_sse.items():
+        if clients:
+            print(f"   📡 SSE subscribers for {topic}: {clients}", flush=True)
+        sse_subscribers[topic].update(clients)
+        sse_unsubscribed[topic].difference_update(clients)
+
+    for topic, removed in incoming_unsubs.items():
+        if removed:
+            print(f"   ❌ SSE unsubscriptions for {topic}: {removed}", flush=True)
+        sse_unsubscribed[topic].update(removed)
+        sse_subscribers[topic].difference_update(removed)
+
+    return "OK", 200
+
 
 @app.route('/health', methods=['GET'])
 def health_check():
@@ -188,43 +190,6 @@ def health_check():
 @app.route('/logs/<topic>', methods=['GET'])
 def view_logs(topic):
     return jsonify({"topic": topic, "logs": logs.get(topic, [])}), 200
-
-@app.route('/gossip', methods=['POST'])
-def receive_gossip():
-    incoming_subs = request.json.get("topics", {})
-    incoming_unsubs = request.json.get("unsubscribed", {})
-    incoming_sse = request.json.get("sse_subscribers", {})
-
-    print(f"🤝 Received gossip update:", flush=True)
-    for topic, urls in incoming_subs.items():
-        print(f"   🔗 {topic}: {urls}", flush=True)
-    for topic, urls in incoming_unsubs.items():
-        print(f"   ❌ Unsubscribed from {topic}: {urls}", flush=True)
-    for topic, clients in incoming_sse.items():
-        print(f"   📡 SSE subscribers for {topic}: {clients}", flush=True)
-
-    # Handle webhook unsubscriptions
-    for topic, urls in incoming_unsubs.items():
-        unsubscribed[topic].update(urls)
-        for url in urls:
-            if url in subscriptions.get(topic, []):
-                subscriptions[topic].remove(url)
-
-    # Handle webhook subscriptions
-    for topic, urls in incoming_subs.items():
-        for url in urls:
-            if url not in unsubscribed[topic] and url not in subscriptions[topic]:
-                subscriptions[topic].append(url)
-
-    # Handle SSE subscriber syncing
-    if "sse_subscribers" not in broker_state["topics"]:
-        broker_state["topics"]["sse_subscribers"] = defaultdict(set)
-
-    for topic, remote_clients in incoming_sse.items():
-        broker_state["topics"]["sse_subscribers"][topic].update(remote_clients)
-
-    return "OK", 200
-
 
 
 @app.route('/election', methods=['POST'])
@@ -236,6 +201,7 @@ def election():
         return jsonify({"response": "OK"}), 200
     return jsonify({"response": "NO"}), 200
 
+
 @app.route('/leader', methods=['POST'])
 def leader_announcement():
     data = request.get_json(force=True)
@@ -243,10 +209,12 @@ def leader_announcement():
     leader_election.update_leader(leader_id)
     return '', 200
 
+
 @app.route('/get_leader', methods=['GET'])
 def get_leader():
     print(f"📥 Received /get_leader request. Returning {leader_election.get_leader()}", flush=True)
     return jsonify({"leader_id": leader_election.get_leader()}), 200
+
 
 def gossip_loop():
     while True:
@@ -257,26 +225,42 @@ def gossip_loop():
         for peer in list(known_peers.keys()):
             try:
                 payload = {
-                    "topics": {k: list(set(v)) for k, v in subscriptions.items()},
-                    "unsubscribed": {k: list(v) for k, v in unsubscribed.items()},
                     "sse_subscribers": {
-                        topic: list(addrs) 
-                        for topic, addrs in broker_state["topics"].get("sse_subscribers", {}).items()
+                        topic: list(addrs - sse_unsubscribed[topic])
+                        for topic, addrs in sse_subscribers.items()
+                    },
+                    "unsubscribed": {
+                        topic: list(sse_unsubscribed[topic])
+                        for topic in sse_unsubscribed
+                        if sse_unsubscribed[topic]
                     }
                 }
+
+                print(f"🔄 Preparing to send gossip to {peer}:")
+                if payload["sse_subscribers"]:
+                    print(f"  📡 sse_subscribers:")
+                    for topic, clients in payload["sse_subscribers"].items():
+                        print(f"    - {topic}: {clients}")
+                if payload["unsubscribed"]:
+                    print(f"  ❌ unsubscribed:")
+                    for topic, clients in payload["unsubscribed"].items():
+                        print(f"    - {topic}: {clients}")
+                if not payload["sse_subscribers"] and not payload["unsubscribed"]:
+                    print(f"  ⛔ Nothing to gossip.")
+
                 res = requests.post(f"http://{peer}/gossip", json=payload, timeout=3)
+                sse_unsubscribed.clear()
                 print(f"📣 Sent gossip to {peer} – status: {res.status_code}", flush=True)
             except Exception as e:
                 print(f"⚠️ Gossip to {peer} failed: {e}", flush=True)
                 known_peers.pop(peer, None)
 
 
-
-
 @app.route('/start_election', methods=['POST'])
 def start_election():
     election.start_election()
     return jsonify({"status": "started"}), 200
+
 
 if __name__ == '__main__':
     print(f"🚀 Broker {BROKER_ID} running on port 5001...", flush=True)
@@ -285,7 +269,6 @@ if __name__ == '__main__':
     def delayed_election():
         time.sleep(5)
         leader_election.start_election()
+
     threading.Thread(target=delayed_election, daemon=True).start()
-
     app.run(host='0.0.0.0', port=5001)
-
