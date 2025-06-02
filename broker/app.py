@@ -7,6 +7,7 @@ import random
 import os
 import queue
 from utils.leader_election import LeaderElection
+from utils.gossip import receive_gossip, start_gossip_thread
 
 app = Flask(__name__)
 
@@ -176,65 +177,11 @@ def publish():
     return '', 200
 
 
-# --- Gossip Receive Endpoint ---
+# --- Gossip Integration ---
 @app.route('/gossip', methods=['POST'])
-def receive_gossip():
-    incoming_sse = request.json.get("sse_subscribers", {})
-    incoming_unsubs = request.json.get("unsubscribed", {})
-
-    print(f"🤝 Received gossip update:", flush=True)
-    for topic, clients in incoming_sse.items():
-        if clients:
-            print(f"   📡 SSE subscribers for {topic}: {clients}", flush=True)
-        sse_subscribers[topic].update(clients)
-        sse_unsubscribed[topic].difference_update(clients)
-
-    for topic, removed in incoming_unsubs.items():
-        if removed:
-            print(f"   ❌ SSE unsubscriptions for {topic}: {removed}", flush=True)
-        sse_unsubscribed[topic].update(removed)
-        sse_subscribers[topic].difference_update(removed)
-
-    return "OK", 200
-
-
-# --- Gossip Loop ---
-def gossip_loop():
-    while True:
-        time.sleep(10)
-        if not known_peers:
-            continue
-
-        payload = {
-            "sse_subscribers": {
-                topic: list(addrs - sse_unsubscribed[topic])
-                for topic, addrs in sse_subscribers.items()
-            },
-            "unsubscribed": {
-                topic: list(sse_unsubscribed[topic])
-                for topic in sse_unsubscribed
-                if sse_unsubscribed[topic]
-            }
-        }
-
-        for peer in list(known_peers.keys()):
-            try:
-                print(f"🔄 Preparing to send gossip to {peer}:")
-                for topic, clients in payload["sse_subscribers"].items():
-                    print(f"    📡 {topic}: {clients}")
-                for topic, removed in payload["unsubscribed"].items():
-                    print(f"    ❌ {topic}: {removed}")
-                if not payload["sse_subscribers"] and not payload["unsubscribed"]:
-                    print("    ⛔ Nothing to gossip.")
-
-                res = requests.post(f"http://{peer}/gossip", json=payload, timeout=3)
-                print(f"📣 Sent gossip to {peer} – status: {res.status_code}", flush=True)
-
-            except Exception as e:
-                print(f"⚠️ Gossip to {peer} failed: {e}", flush=True)
-                known_peers.pop(peer, None)
-
-        sse_unsubscribed.clear()
+def handle_gossip():
+    print(f"📥 Gossip received at broker", flush=True)
+    return receive_gossip(request, sse_subscribers, sse_unsubscribed)
 
 
 # --- Leader Election Endpoints ---
@@ -276,11 +223,12 @@ def health_check():
 def view_logs(topic):
     return jsonify({"topic": topic, "logs": logs.get(topic, [])}), 200
 
+# --- Start Gossip Background Thread ---
+start_gossip_thread(sse_subscribers, sse_unsubscribed, known_peers)
 
 # --- Main Startup ---
 if __name__ == '__main__':
     print(f"🚀 Broker {BROKER_ID} running on port 5001...", flush=True)
-    threading.Thread(target=gossip_loop, daemon=True).start()
 
     def delayed_election():
         time.sleep(5)
@@ -288,3 +236,4 @@ if __name__ == '__main__':
 
     threading.Thread(target=delayed_election, daemon=True).start()
     app.run(host='0.0.0.0', port=5001)
+
