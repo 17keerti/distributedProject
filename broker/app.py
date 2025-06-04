@@ -112,8 +112,10 @@ def unsubscribe():
 
     if mode == "sse":
         print(f"🔕 SSE unsubscription requested for topic '{topic}'", flush=True)
-        sse_subscribers[topic].discard(request.remote_addr)
-        sse_unsubscribed[topic].add(request.remote_addr)
+        client_ip = request.remote_addr
+        sse_subscribers[topic].discard(client_ip)
+        sse_unsubscribed[topic].add(client_ip)
+        print(f"📉 After unsubscription, subscribers: {sse_subscribers[topic]}")
         return jsonify({"message": f"Unsubscribed from topic '{topic}' (SSE)"}), 200
 
     elif mode == "webhook" or not mode:
@@ -128,6 +130,7 @@ def unsubscribe():
         return jsonify({"message": f"Not subscribed to '{topic}' with URL '{url}'"}), 200
 
     return jsonify({"error": f"Unsupported unsubscription mode: {mode}"}), 400
+
 
 
 # --- Publish Messages ---

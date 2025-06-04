@@ -114,7 +114,7 @@ class LeaderElection:
                 leader_id = current_leader_getter()
                 if leader_id is None or leader_id == self.broker_id:
                     continue
-                for peer_url, peer_id in self.known_peers.items():
+                for peer_url, peer_id in list(self.known_peers.items()):
                     if peer_id == leader_id:
                         try:
                             res = requests.get(f"http://{peer_url}/ping", timeout=2)

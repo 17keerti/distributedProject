@@ -41,6 +41,7 @@ def start_gossip_thread(sse_subscribers, sse_unsubscribed, known_peers):
                     if sse_unsubscribed[topic]
                 }
             }
+
             for peer in list(known_peers.keys()):
                 try:
                     print(f"🔄 Preparing to send gossip to {peer}:")
@@ -48,16 +49,18 @@ def start_gossip_thread(sse_subscribers, sse_unsubscribed, known_peers):
                         print(f"    📡 {topic}: {clients}")
                     for topic, removed in payload["unsubscribed"].items():
                         print(f"    ❌ {topic}: {removed}")
+
                     if not payload["sse_subscribers"] and not payload["unsubscribed"]:
                         print("    ⛔ Nothing to gossip.")
 
                     res = requests.post(f"http://{peer}/gossip", json=payload, timeout=3)
                     print(f"📣 Sent gossip to {peer} – status: {res.status_code}", flush=True)
-                
                 except Exception as e:
                     print(f"⚠️ Gossip to {peer} failed: {e}", flush=True)
-                    known_peers.pop(peer, None)
+                    # Optionally retry later instead of removing
+                    # known_peers.pop(peer, None)
 
-        sse_unsubscribed.clear()
+            # ✅ Clear unsubscribed state after gossip is sent
+            sse_unsubscribed.clear()
 
     threading.Thread(target=gossip_loop, daemon=True).start()
