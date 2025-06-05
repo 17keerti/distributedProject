@@ -102,6 +102,6 @@ def publish_weather():
 
 if __name__ == "__main__":
     while True:
+    # Infinite loop to publish weather data every 10 seconds
         publish_weather()
-        # Publish every 10 seconds
         time.sleep(10)  
